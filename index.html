@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>XAcademy Payment (Polygon USDC)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .card { max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 12px; padding: 20px; }
+    h2 { margin-top: 0; }
+    button { padding: 12px 18px; font-weight: 600; border-radius: 8px; border: 0; background: #5b8def; color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .row { margin: 12px 0; }
+    .small { color: #666; font-size: 13px; }
+    .ok { color: #0a7d26; }
+    .warn { color: #b46b00; }
+    .err { color: #b00020; }
+    #log div { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Pay 0.5 USDC to start your paper</h2>
+    <div class="row small">Network: Polygon Mainnet (chainId 0x89)</div>
+
+    <div class="row"><div id="status" class="warn">MetaMask not connected.</div></div>
+    <div class="row"><button id="connectBtn">Connect MetaMask</button></div>
+    <div class="row"><button id="switchBtn">Switch to Polygon Mainnet</button></div>
+
+    <hr />
+    <div class="row small">Detected parameters: <span id="params"></span></div>
+    <div class="row"><button id="payBtn" disabled>Pay 0.5 USDC</button></div>
+    <div class="row"><div id="log" class="small"></div></div>
+  </div>
+
+  <script>
+    // ✅ Config
+    const RECEIVER = "0x489bab1c242d7a35808563c85265205a8f11ab89"; // your Polygon wallet
+    const USDC_POLYGON = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC token
+    const POLYGON_CHAIN_ID_HEX = "0x89"; // Polygon Mainnet
+    const WEBHOOK_URL = "https://xacademy-payment-verifier--x-academy-b5924.web.app/webhook"; // replace with your backend
+
+    // ✅ URL params
+    const qs = new URLSearchParams(window.location.search);
+    const uid = qs.get("uid") || "";
+    const subject = qs.get("subject") || "";
+    document.getElementById("params").textContent = `uid=${uid || "(missing)"} | subject=${subject || "(missing)"}`;
+
+    // ✅ Helpers
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const connectBtn = document.getElementById("connectBtn");
+    const switchBtn = document.getElementById("switchBtn");
+    const payBtn = document.getElementById("payBtn");
+
+    function log(msg, cls="") {
+      const p = document.createElement("div");
+      p.textContent = msg;
+      if (cls) p.className = cls;
+      logEl.appendChild(p);
+    }
+    function setStatus(msg, cls="") {
+      statusEl.textContent = msg;
+      statusEl.className = cls || "small";
+    }
+
+    async function ensurePolygon(provider) {
+      const net = await provider.getNetwork();
+      const chainHex = "0x" + net.chainId.toString(16);
+      if (chainHex !== POLYGON_CHAIN_ID_HEX) {
+        try {
+          await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: POLYGON_CHAIN_ID_HEX }],
+          });
+          setStatus("Switched to Polygon Mainnet.", "ok");
+        } catch (err) {
+          setStatus("Switch failed. Add Polygon manually.", "err");
+          throw err;
+        }
+      } else {
+        setStatus("Polygon Mainnet detected.", "ok");
+      }
+    }
+
+    // ✅ Actions
+    connectBtn.onclick = async () => {
+      try {
+        if (!window.ethereum) return alert("MetaMask not found.");
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        const addr = await provider.getSigner().getAddress();
+        setStatus(`Connected: ${addr}`, "ok");
+        log("MetaMask connected.", "ok");
+        payBtn.disabled = false;
+      } catch (e) {
+        setStatus("Connect failed.", "err");
+        log(e.message, "err");
+      }
+    };
+
+    switchBtn.onclick = async () => {
+      try {
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await ensurePolygon(provider);
+      } catch (e) {
+        log(e.message, "err");
+      }
+    };
+
+    payBtn.onclick = async () => {
+      try {
+        if (!uid || !subject) return alert("Missing uid or subject in URL.");
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await ensurePolygon(provider);
+        const signer = provider.getSigner();
+        const usdc = new ethers.Contract(USDC_POLYGON, ["function transfer(address to, uint256 amount) returns (bool)"], signer);
+        const amount = ethers.utils.parseUnits("0.5", 6);
+        setStatus("Sending 0.5 USDC...", "warn");
+        const tx = await usdc.transfer(RECEIVER, amount);
+        log(`Tx submitted: ${tx.hash}`, "small");
+        await tx.wait();
+        setStatus("Payment confirmed.", "ok");
+        log("USDC transfer confirmed.", "ok");
+
+        // ✅ Webhook call
+        await fetch(WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uid, subject, txHash: tx.hash, chainId: "137", token: "USDC", amount: "0.5", receiver: RECEIVER })
+        });
+        log("Webhook notified.", "ok");
+        alert("Payment successful!");
+      } catch (e) {
+        setStatus("Payment failed.", "err");
+        log(e.message, "err");
+      }
+    };
+  </script>
+</body>
+</html>
